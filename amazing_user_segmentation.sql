@@ -60,7 +60,7 @@ WITH
                   AND t.is_test_team_order = 0
                   AND o.paid_at IS NOT NULL
                   -- AND o.type = 'CURATION_PB'
-                  AND u.gender IS NOT NULL
+                  AND u.gender IS NOT NULL AND u.gender !='X'
                   AND u.birth_date ~ '^[0-9]{6}$'
                   AND p.menu_name != '프리미엄 100매 물티슈'
                   AND DATE(o.created_at) >= '2025-01-23'
