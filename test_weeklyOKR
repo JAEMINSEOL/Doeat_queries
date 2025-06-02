@@ -1,0 +1,394 @@
+WITH daily_product_data as (
+    SELECT date, sigungu
+        , case when type = 'TEAMORDER' then '3P-GENERAL' when type = 'CURATION_PB' and menu_type = 'MAIN' then '1P-MAIN' when type = 'CURATION_PB' and menu_type = 'SIDE' then '1P-SIDE' when type like '%SEVEN%' then '3P-777' when type like '%119%' then '3P-119' else 'ETC' end as order_type
+        , sum(order_price - doeat_discount) as daily_gmv
+        , sum(order_cnt) as daily_orders
+        , sum(case when delivery_type = 'BARO_ARRIVAL' then order_cnt end) as daily_baro_arrival_orders
+        , sum(refund) as daily_refund
+        , sum(case when ((delivery_type is null or delivery_type != 'BARO_ARRIVAL') and date >= '2025-04-22') or date < '2025-04-22' then basic_unit_price_cost + distance_cost + urgent_sourcing_cost + weather_cost + surcharge - adjusted_cost - weather_income end) as daily_rider_cost_temp
+        , sum(order_income) as daily_revenue
+        , sum(additional_settlement) as daily_additional_settlement
+        , sum(payment*0.0205) as daily_pg_fee
+    FROM doeat_data_mart.daily_economics
+    GROUP BY 1,2,3
+)
+, daily_orders as (
+    SELECT date, sigungu, sum(daily_orders-case when date >= '2025-04-30' then coalesce(daily_baro_arrival_orders,0) else 0 end) as daily_orders
+        , dateadd(day, 6-EXTRACT(dayofweek from dateadd(day, -1, date)), date) as week
+    FROM daily_product_data
+    GROUP BY 1,2
+)
+, weekly_orders as (
+    SELECT week, sigungu, sum(daily_orders) as weekly_orders
+    FROM daily_orders
+    GROUP BY 1,2
+)
+, weekly_unit_manager_mission as (
+    SELECT m.date, m.region_name, m.swat_manager_mission_cost
+        , m.swat_manager_mission_cost / sum(weekly_orders) as unit_swat_manager_mission_cost
+    FROM doeat_data_mart.daily_rider_mission_cost m
+    JOIN weekly_orders w on m.date = w.week and (m.region_name = w.sigungu or (m.region_name like '%'||w.sigungu||'%'))
+    GROUP BY 1,2,3
+)
+, daily_unit_promotion_temp as (
+    SELECT m.*, d.week
+        , sum(d.daily_orders) as total_daily_orders
+        , m.normal_rider_promotion_cost / total_daily_orders as unit_normal_rider_promotion_cost
+        , m.swat_rider_promotion_cost / total_daily_orders as unit_swat_rider_promotion_cost
+    FROM doeat_data_mart.daily_rider_mission_cost m
+    JOIN daily_orders d on m.date = d.date and (m.region_name = d.sigungu or (m.region_name like '%'||d.sigungu||'%'))
+    GROUP BY 1,2,3,4,5,6
+    ORDER BY 1,2
+)
+, daily_unit_promotion as (
+    SELECT d.date, d.region_name, d.unit_normal_rider_promotion_cost, d.unit_swat_rider_promotion_cost
+        , COALESCE(w.unit_swat_manager_mission_cost, w2.unit_swat_manager_mission_cost) as unit_swat_manager_mission_cost
+    FROM daily_unit_promotion_temp d
+    JOIN (SELECT region_name, max(date) as max_date FROM weekly_unit_manager_mission WHERE swat_manager_mission_cost > 0 GROUP BY 1) m on d.region_name = m.region_name
+    LEFT JOIN weekly_unit_manager_mission w on d.region_name = w.region_name and d.week = w.date and w.swat_manager_mission_cost > 0
+    LEFT JOIN weekly_unit_manager_mission w2 on d.region_name = w2.region_name and w.date is null and w2.date = m.max_date
+)
+, order_menu_type as (
+    select order_id, sum(case when p.sub_type = 'SIDE' then 1 else 0 end) as pb_side_menu_count, sum(case when p.sub_type = 'MAIN' then 1 else 0 end) as pb_main_menu_count, case when pb_side_menu_count > 0 and pb_main_menu_count = 0 then 'SIDE' else 'MAIN' end as menu_type, min(o.created_at) as created_at
+    from doeat_delivery_production.orders o
+    join doeat_delivery_production.item i on(i.order_id = o.id)
+    left join doeat_delivery_production.doeat_777_product p on(i.product_id = p.id)
+    where orderyn = 1
+    group by 1
+    order by 1 desc
+)
+, baro_rider_cost as (
+    select date, rider_id, sigungu
+        , sum(case when hour <= 16 then basic_unit_price + distance_price + urgent_sourcing_price + rain_delivery_price + surcharge - adjusted_price end) as rider_cost_before_17
+        , count(distinct case when hour <= 16 then order_id end) as order_count_before_17
+        , count(distinct case when hour <= 16 and menu_type = 'MAIN' then order_id end) as order_count_before_17_main
+        , count(distinct case when hour <= 16 and menu_type = 'SIDE' then order_id end) as order_count_before_17_side
+        , sum(case when hour > 16 then basic_unit_price + distance_price + urgent_sourcing_price + rain_delivery_price + surcharge - adjusted_price end) as rider_cost_after_17
+        , count(distinct case when hour > 16 then order_id end) as order_count_after_17
+        , count(distinct case when hour > 16 and menu_type = 'MAIN' then order_id end) as order_count_after_17_main
+        , count(distinct case when hour > 16 and menu_type = 'SIDE' then order_id end) as order_count_after_17_side
+    from (
+        select distinct rb.rider_id, o.sigungu, date(o.created_at) as date, extract(hour from o.created_at) as hour, bo.order_id, dpd.basic_unit_price, dpd.distance_price, dpd.urgent_sourcing_price, dpd.adjusted_price, dpd.rain_delivery_price, dpd.promotion_delivery_price, coalesce(os.surcharge,0) as surcharge, datediff(second, o.paid_at, o.delivered_at)/60.0 as delivery_time, o.order_price, coalesce(om.menu_type,'MAIN') as menu_type
+        from doeat_delivery_production.rider_bulk rb
+        join doeat_delivery_production.bulk b on(rb.bulk_id = b.id)
+        join doeat_delivery_production.bulk_order bo on(b.id = bo.bulk_id)
+        join doeat_delivery_production.delivery_price_detail dpd on(dpd.order_id = bo.order_id)
+        join doeat_delivery_production.orders o on(o.id = bo.order_id)
+        join (select distinct order_id from doeat_delivery_production.store_book_keeping_transaction) sbkt on(sbkt.order_id = o.id)
+        left join (select * from doeat_delivery_production.order_surcharge where is_deleted = 0) os on(os.order_id = bo.order_id)
+        left join order_menu_type om on(o.id = om.order_id)
+        where date(rb.created_at) >= '2025-04-22'
+          and rb.is_deleted = 0
+          and bo.is_deleted = 0) a
+    group by 1,2,3
+)
+, baro_rider_base_cost as (
+    select date(starts_at) as date, rider_id, '관악구' as sigungu
+        , sum(case when extract(hour from starts_at) <= 15 then datediff(second, hourly_wage_starts_at, hourly_wage_ends_at)/3600.0 end) as total_operation_time_before_16
+        , sum(case when extract(hour from starts_at) > 15 then datediff(second, hourly_wage_starts_at, hourly_wage_ends_at)/3600.0 end) as total_operation_time_after_16
+        , avg(case when extract(hour from starts_at) <= 15 then base_hourly_wage end) as base_hourly_wage_before_16
+        , avg(case when extract(hour from starts_at) > 15 then base_hourly_wage end) as base_hourly_wage_after_16
+    from doeat_delivery_production.baro_arrival_rider_schedule
+    group by 1,2,3
+)
+, baro_rider_cost_total as (
+    select date, sigungu, case when order_type = 'baro_rider_cost_main' then '1P-MAIN' when order_type = 'baro_rider_cost_side' then '1P-SIDE' end as order_type, baro_rider_cost
+    from (
+        select a.date, a.sigungu, sum(rider_cost_main) as baro_rider_cost_main, sum(rider_cost_side) as baro_rider_cost_side
+        from (
+            select a.date, a.rider_id, a.sigungu
+                , greatest(a.rider_cost_before_17+case when a.date >= '2025-04-30' then 0 else a.order_count_before_17*coalesce(unit_rider_promotion_cost,200)+order_count_before_17*coalesce(unit_swat_manager_mission_cost,200) end, ceiling(b.total_operation_time_before_16*base_hourly_wage_before_16/100)*100) as rider_cost_before_16
+                , rider_cost_before_16*a.order_count_before_17_main*1.0/nullif(a.order_count_before_17,0) as rider_cost_before_16_main
+                , rider_cost_before_16*a.order_count_before_17_side*1.0/nullif(a.order_count_before_17,0) as rider_cost_before_16_side
+                , greatest(a.rider_cost_after_17+case when a.date >= '2025-04-29' then 0 else a.order_count_after_17*coalesce(unit_rider_promotion_cost,200)+order_count_before_17*coalesce(unit_swat_manager_mission_cost,200) end, ceiling(b.total_operation_time_after_16*base_hourly_wage_after_16/100)*100) as rider_cost_after_16
+                , rider_cost_after_16*a.order_count_after_17_main*1.0/nullif(a.order_count_after_17,0) as rider_cost_after_16_main
+                , rider_cost_after_16*a.order_count_after_17_side*1.0/nullif(a.order_count_after_17,0) as rider_cost_after_16_side
+                , rider_cost_before_16_main + rider_cost_after_16_main as rider_cost_main
+                , rider_cost_before_16_side + rider_cost_after_16_side as rider_cost_side
+            from baro_rider_cost a
+            left join baro_rider_base_cost b on(a.date = b.date and a.rider_id = b.rider_id and a.sigungu = b.sigungu)
+            left join (
+                select date, region_name, coalesce(unit_normal_rider_promotion_cost,0) + coalesce(unit_swat_rider_promotion_cost,0) as unit_rider_promotion_cost, unit_swat_manager_mission_cost
+                from daily_unit_promotion) c on(a.date = c.date and (c.region_name = a.sigungu or (c.region_name like '%'||a.sigungu||'%')))) a
+        group by 1,2) unpivot (baro_rider_cost for order_type in (baro_rider_cost_main, baro_rider_cost_side))
+)
+, baro_dispose as (
+    select date, sigungu, case when sub_type = 'MAIN' then '1P-MAIN' when sub_type = 'SIDE' then '1P-SIDE' end as order_type, coalesce(sum(disposed_price_before_16),0) + coalesce(sum(disposed_price_after_16),0) as disposed_price
+    from (
+        select date(pickup_at) as date, s.sigungu, product_id, menu_name, discounted_price, sub_type
+            , sum(case when extract(hour from rb.created_at) <= 15 then b.left_amount end) as left_amount_before_16
+            , left_amount_before_16*discounted_price*0.6 as disposed_price_before_16
+            , sum(case when extract(hour from rb.created_at) > 15 then b.left_amount end) as left_amount_after_16
+            , left_amount_after_16*discounted_price*0.6 as disposed_price_after_16
+        from doeat_delivery_production.rider_bulk rb
+        join doeat_delivery_production.bulk b on(rb.bulk_id = b.id)
+        join doeat_delivery_production.store s on(b.store_id = s.id)
+        join doeat_delivery_production.doeat_777_product p on(b.product_id = p.id)
+        where date is not null
+          and rb.is_deleted = 0
+          and date(rb.created_at) >= '2025-05-19'
+        group by 1,2,3,4,5,6) a
+    group by 1,2,3
+    order by 1,2,3
+)
+, daily_coupon_cost as (
+    SELECT date(o.created_at) as date, o.sigungu
+        , case when type = 'TEAMORDER' then '3P-GENERAL' when type = 'CURATION_PB' and menu_type = 'MAIN' then '1P-MAIN' when type = 'CURATION_PB' and menu_type = 'SIDE' then '1P-SIDE' when type like '%SEVEN%' then '3P-777' when type like '%119%' then '3P-119' else 'ETC' end as order_type
+        , sum(case when o.type = 'TEAMORDER' and t.main_user_id != o.user_id then 1000 else 0 end) as daily_teamorder_join_coupon_cost
+        , sum(case when c.coupon_tag = 'CS_RIDER' then c.coupon_discount else 0 end) as daily_late_delivery_coupon_cost
+        , sum(case when c.coupon_tag = 'CS' and o.coupon_code ~* '(order-cancel|주문취소)' then c.coupon_discount else 0 end) as daily_order_cancel_coupon_cost
+        -- , sum(case when o.coupon_code like 'doeat-point%' then c.coupon_discount else 0 end) as doeat_point_coupon_cost
+        , sum(case when c.coupon_tag = 'CS' and o.coupon_code !~* '(order-cancel|주문취소)' then c.coupon_discount else 0 end) as daily_cs_coupon_cost
+    FROM doeat_delivery_production.orders o
+    JOIN doeat_delivery_production.team_order t on o.team_order_id = t.id
+    JOIN doeat_delivery_production.store s on o.store_id = s.id
+    LEFT JOIN order_menu_type om on o.id = om.order_id
+    LEFT JOIN doeat_delivery_production.coupon c on o.coupon_code = c.coupon_code
+    WHERE o.orderyn = 1
+      and o.delivered_at is not null
+      and s.is_fake = 0
+      and t.is_test_team_order = 0
+--         and o.created_at > '2024-05-01'
+    GROUP BY 1,2,3
+)
+, daily_curation_fee as (
+    select date(o.created_at) as date, o.sigungu
+        , case when type = 'TEAMORDER' then '3P-GENERAL' when type = 'CURATION_PB' and menu_type = 'MAIN' then '1P-MAIN' when type = 'CURATION_PB' and menu_type = 'SIDE' then '1P-SIDE' when type like '%SEVEN%' then '3P-777' when type like '%119%' then '3P-119' else 'ETC' end as order_type
+        , sum(json_extract_path_text(log_json, 'curationFee')) as daily_curation_fee
+        , sum(case when cancel_amount - order_price = 1000 then json_extract_path_text(log_json, 'curationFee') end) as daily_cancel_curation_fee
+    from doeat_delivery_production.orders o
+    join (select distinct order_id from doeat_delivery_production.store_book_keeping_transaction) t on(o.id = t.order_id)
+    join order_menu_type om on o.id = om.order_id
+    left join (select distinct order_id, cancel_amount from doeat_delivery_production.payment_cancel) pc on(o.id = pc.order_id)
+    where date(o.created_at) >= '2024-12-01'
+      and json_extract_path_text(log_json, 'curationFee') = 1000
+      and (json_extract_path_text(log_json, 'membershipDiscount') = 0 or json_extract_path_text(log_json, 'membershipDiscount') is null)
+    group by 1,2,3
+)
+, daily_data as (
+    SELECT d.date, d.sigungu, d.order_type
+        , d.daily_gmv, d.daily_orders, d.daily_revenue, d.daily_refund, d.daily_additional_settlement, d.daily_pg_fee
+        , d.daily_rider_cost_temp + case when d.date < '2025-04-22' then d.daily_orders else d.daily_orders - coalesce(d.daily_baro_arrival_orders,0) end * (COALESCE(p.unit_normal_rider_promotion_cost,0)+coalesce(p.unit_swat_rider_promotion_cost,0)+coalesce(p.unit_swat_manager_mission_cost,0)) + COALESCE(c.daily_late_delivery_coupon_cost,0) + coalesce(b.baro_rider_cost,0) + coalesce(bd.disposed_price,0) as daily_delivery_cost
+        , d.daily_rider_cost_temp
+        , case when d.date < '2025-04-22' then d.daily_orders else d.daily_orders - coalesce(d.daily_baro_arrival_orders,0) end
+        , COALESCE(p.unit_normal_rider_promotion_cost,0)
+        , coalesce(p.unit_swat_rider_promotion_cost,0)
+        , coalesce(p.unit_swat_manager_mission_cost,0)
+        , COALESCE(c.daily_late_delivery_coupon_cost,0)
+        , coalesce(b.baro_rider_cost,0)
+        , COALESCE(c.daily_teamorder_join_coupon_cost + c.daily_order_cancel_coupon_cost + c.daily_cs_coupon_cost,0) as daily_coupon_cost
+        , p.unit_swat_manager_mission_cost
+        , cf.daily_curation_fee, cf.daily_cancel_curation_fee
+    FROM daily_product_data d
+    LEFT JOIN daily_unit_promotion p on d.date = p.date and (p.region_name = d.sigungu or (p.region_name like '%'||d.sigungu||'%'))
+    LEFT JOIN baro_rider_cost_total b on d.date = b.date and d.sigungu = b.sigungu and d.order_type = b.order_type
+    LEFT JOIN baro_dispose bd on d.date = bd.date and d.sigungu = bd.sigungu and d.order_type = bd.order_type
+    LEFT JOIN daily_coupon_cost c on d.date = c.date and d.sigungu = c.sigungu and d.order_type = c.order_type
+    LEFT JOIN daily_curation_fee cf on d.date = cf.date and d.sigungu = cf.sigungu and d.order_type = cf.order_type
+)
+, daily_subscription_fee as (
+    select date, case when sigungu = 'dj_subcription_amount' then '동작구' when sigungu = 'gw_subcription_amount' then '관악구' end as sigungu, sum(subscription_amount) as subscription_amount
+    from (
+        select date, user_id, sigungu as sigungu_temp, sum(payment_amount) as subscription_amount_total, sum(order_cnt_gw) as order_cnt_gw, sum(order_cnt_dj) as order_cnt_dj
+            , case when sum(order_cnt_gw) is null and coalesce(sigungu,'관악구') = '관악구' then 1 when coalesce(sum(order_cnt_gw)+sum(order_cnt_dj),0) != 0 then sum(order_cnt_gw)/(sum(order_cnt_gw)+sum(order_cnt_dj)) else 0 end as gw_percent
+            , case when sum(order_cnt_dj) is null and coalesce(sigungu,'관악구') = '동작구' then 1 when coalesce(sum(order_cnt_gw)+sum(order_cnt_dj),0) != 0 then sum(order_cnt_dj)/(sum(order_cnt_gw)+sum(order_cnt_dj)) else 0 end as dj_percent
+            , subscription_amount_total * case when date < '2025-05-16' then 1 else gw_percent end as gw_subcription_amount
+            , subscription_amount_total * case when date < '2025-05-16' then 0 else dj_percent end as dj_subcription_amount
+        from (
+            select case when a.date is null then b.date else a.date end as date, case when a.user_id is null then b.user_id else a.user_id end as user_id, a.payment_amount, b.order_cnt_gw, b.order_cnt_dj, c.id, c.sigungu, c.created_at, row_number() over(partition by case when a.user_id is null then b.user_id else a.user_id end, case when a.date is null then b.date else a.date end, a.payment_amount order by c.created_at desc) as rn
+            from (
+                select distinct date(b.approved_at) as date, a.user_id, b.payment_amount
+                from doeat_delivery_production.membership_subscription a
+                join doeat_delivery_production.payment b on(a.subscription_key = b.subscription_key)
+                left join doeat_delivery_production.payment_cancel c on(a.id = c.subscription_id)
+                where a.subscription_key is not null
+                  and payment_amount = 2900
+                  and c.id is null) a
+            full join (
+                select date(o.created_at) as date, o.user_id, count(distinct case when o.sigungu = '관악구' then o.id end) as order_cnt_gw, count(distinct case when o.sigungu = '동작구' then o.id end) as order_cnt_dj
+                from doeat_delivery_production.orders o
+                join doeat_delivery_production.team_order t on(o.team_order_id = t.id)
+                where o.orderyn = 1
+                  and o.delivered_at is not null
+                  and t.is_test_team_order = 0
+                  and o.sigungu in('관악구','동작구')
+                group by 1,2) b on(a.date = b.date and a.user_id = b.user_id)
+            left join (
+                select date(o.created_at) as date, o.user_id, o.id, o.sigungu, o.created_at
+                from doeat_delivery_production.orders o
+                join doeat_delivery_production.team_order t on(o.team_order_id = t.id)
+                where o.orderyn = 1
+                  and o.delivered_at is not null
+                  and t.is_test_team_order = 0
+                  and o.sigungu in('관악구','동작구')) c on(a.date >= c.date and a.user_id = c.user_id)) a
+        where rn = 1
+        group by 1,2,3
+        having subscription_amount_total is not null) unpivot (subscription_amount for sigungu in (gw_subcription_amount, dj_subcription_amount)) a
+    group by 1,2
+)
+
+SELECT a.week, a.sigungu
+    , coalesce(gmv_3p_777,0) + coalesce(gmv_3p_119,0) + coalesce(gmv_3p_general,0) + coalesce(gmv_1p_main,0) + coalesce(gmv_1p_side,0) + coalesce(gmv_etc,0) + coalesce(curation_fee,0) + coalesce(subscription_amount,0) as gtv_total
+    , gmv_3p_777
+    , gmv_3p_119
+    , gmv_3p_general
+    , gmv_1p_main
+    , gmv_1p_side
+    , gmv_etc
+    , curation_fee
+    , subscription_amount
+
+    , coalesce(revenue_3p_777,0) + coalesce(revenue_3p_119,0) + coalesce(revenue_3p_general,0) + coalesce(gmv_1p_main,0) + coalesce(gmv_1p_side,0) + coalesce(revenue_etc,0) + coalesce(curation_fee,0) + coalesce(subscription_amount,0) as revenue_total
+    , coalesce(revenue_3p_777,0) + coalesce(revenue_3p_119,0) + coalesce(revenue_3p_general,0) + coalesce(gmv_1p_main,0) + coalesce(gmv_1p_side,0) + coalesce(revenue_etc,0) + coalesce(curation_fee,0) as revenue_total_without_subscription
+    , revenue_3p_777
+    , revenue_3p_119
+    , revenue_3p_general
+    , gmv_1p_main as revenue_1p_main
+    , gmv_1p_side as revenue_1p_side
+    , revenue_etc
+    , curation_fee as revenue_curation_fee
+    , subscription_amount as revenue_subscription_amount
+
+    , coalesce(rider_cost_3p_777,0) + coalesce(rider_cost_3p_119,0) + coalesce(rider_cost_3p_general,0) + coalesce(rider_cost_1p_main,0) + coalesce(rider_cost_1p_side,0) + coalesce(rider_cost_etc,0) as rider_cost_total
+    , rider_cost_3p_777
+    , rider_cost_3p_119
+    , rider_cost_3p_general
+    , rider_cost_1p_main
+    , rider_cost_1p_side
+    , rider_cost_etc
+
+    , coalesce(pg_fee_3p_777,0) + coalesce(pg_fee_3p_119,0) + coalesce(pg_fee_3p_general,0) + coalesce(pg_fee_1p_main,0) + coalesce(pg_fee_1p_side,0) + coalesce(curation_fee*0.0205,0) + coalesce(subscription_amount*0.0205,0) + coalesce(pg_fee_etc,0) as pg_fee_total
+    , pg_fee_3p_777
+    , pg_fee_3p_119
+    , pg_fee_3p_general
+    , pg_fee_1p_main
+    , pg_fee_1p_side
+    , curation_fee*0.0205 as curation_fee_pg_fee
+    , subscription_amount*0.0205 as subscription_amount_pg_fee
+    , pg_fee_etc
+
+    , coalesce(additional_settlement_3p_777,0) + coalesce(additional_settlement_3p_119,0) + coalesce(additional_settlement_3p_general,0) + coalesce(additional_settlement_1p_main,0) + coalesce(additional_settlement_1p_side,0) + coalesce(additional_settlement_etc,0) as additional_settlement_total
+    , additional_settlement_3p_777
+    , additional_settlement_3p_119
+    , additional_settlement_3p_general
+    , additional_settlement_1p_main
+    , additional_settlement_1p_side
+    , additional_settlement_etc
+
+    , coalesce(coupon_cost_3p_777,0) + coalesce(coupon_cost_3p_119,0) + coalesce(coupon_cost_3p_general,0) + coalesce(coupon_cost_1p_main,0) + coalesce(coupon_cost_1p_side,0) + coalesce(coupon_cost_etc,0) as coupon_cost_total
+    , coupon_cost_3p_777
+    , coupon_cost_3p_119
+    , coupon_cost_3p_general
+    , coupon_cost_1p_main
+    , coupon_cost_1p_side
+    , coupon_cost_etc
+
+    , gmv_1p_main * 0.6 + gmv_1p_side * 0.6 as cogs_1p
+    , gmv_1p_main * 0.6 as cogs_1p_main
+    , gmv_1p_side * 0.6 as cogs_1p_side
+
+    , revenue_total - rider_cost_total - pg_fee_total - additional_settlement_total - coupon_cost_total - coalesce(cogs_1p,0) as contribution_margin
+    , (revenue_total_without_subscription - coalesce(cogs_1p,0))/orders as unit_income
+    , rider_cost_total/orders as unit_delivery_cost
+    , (revenue_total_without_subscription - rider_cost_total - pg_fee_total - additional_settlement_total -coupon_cost_total - coalesce(cogs_1p,0))/orders as unit_economics
+    , rider_cost_1p/orders_1p as unit_delivery_cost_1p
+    , (coalesce(rider_cost_3p_general,0)+coalesce(rider_cost_3p_777,0)+coalesce(rider_cost_3p_119,0)+coalesce(rider_cost_etc,0))/(coalesce(orders_3p_general,0)+coalesce(orders_3p_777,0)+coalesce(orders_3p_119,0)+coalesce(orders_etc,0)) as unit_delivery_cost_3p
+
+    , cac_coupon_cost
+    , event_coupon_cost
+    , normal_coupon_cost
+    , first_order_coupon_cost
+    , resurrection_coupon_cost
+
+    , orders_1p
+    , orders_1p_main
+    , orders_1p_side
+from (
+    select date(dateadd(day, -(EXTRACT(dayofweek from date)+LEFT('7',1)::INT-1)%7, date)) as week, sigungu
+        , sum(daily_gmv) as gmv
+        , sum(daily_orders) as orders
+        , sum(daily_revenue) as revenue
+        , sum(daily_delivery_cost) as rider_cost
+        , sum(daily_coupon_cost) as coupon_cost
+        , sum(daily_curation_fee) as curation_fee
+        , sum(daily_additional_settlement) as additional_settlement
+        , sum(daily_pg_fee) as pg_fee
+        , sum(case when order_type like '1P%' then daily_gmv end) as gmv_1p
+        , sum(case when order_type like '1P%' then daily_orders end) as orders_1p
+        , sum(case when order_type like '1P%' then daily_gmv end) as revenue_1p
+        , sum(case when order_type like '1P%' then daily_delivery_cost end) as rider_cost_1p
+        , sum(case when order_type like '1P%' then daily_coupon_cost end) as coupon_cost_1p
+        , sum(case when order_type like '1P%' then daily_curation_fee end) as curation_fee_1p
+        , sum(case when order_type like '1P%' then daily_additional_settlement end) as additional_settlement_1p
+        , sum(case when order_type like '1P%' then daily_pg_fee end) as pg_fee_1p
+        , sum(case when order_type = '1P-MAIN' then daily_gmv end) as gmv_1p_main
+        , sum(case when order_type = '1P-MAIN' then daily_orders end) as orders_1p_main
+        , sum(case when order_type = '1P-MAIN' then daily_revenue end) as revenue_1p_main
+        , sum(case when order_type = '1P-MAIN' then daily_delivery_cost end) as rider_cost_1p_main
+        , sum(case when order_type = '1P-MAIN' then daily_coupon_cost end) as coupon_cost_1p_main
+        , sum(case when order_type = '1P-MAIN' then daily_curation_fee end) as curation_fee_1p_main
+        , sum(case when order_type = '1P-MAIN' then daily_additional_settlement end) as additional_settlement_1p_main
+        , sum(case when order_type = '1P-MAIN' then daily_pg_fee end) as pg_fee_1p_main
+        , sum(case when order_type = '1P-SIDE' then daily_gmv end) as gmv_1p_side
+        , sum(case when order_type = '1P-SIDE' then daily_orders end) as orders_1p_side
+        , sum(case when order_type = '1P-SIDE' then daily_revenue end) as revenue_1p_side
+        , sum(case when order_type = '1P-SIDE' then daily_delivery_cost end) as rider_cost_1p_side
+        , sum(case when order_type = '1P-SIDE' then daily_coupon_cost end) as coupon_cost_1p_side
+        , sum(case when order_type = '1P-SIDE' then daily_curation_fee end) as curation_fee_1p_side
+        , sum(case when order_type = '1P-SIDE' then daily_additional_settlement end) as additional_settlement_1p_side
+        , sum(case when order_type = '1P-SIDE' then daily_pg_fee end) as pg_fee_1p_side
+        , sum(case when order_type = '3P-GENERAL' then daily_gmv end) as gmv_3p_general
+        , sum(case when order_type = '3P-GENERAL' then daily_orders end) as orders_3p_general
+        , sum(case when order_type = '3P-GENERAL' then daily_revenue end) as revenue_3p_general
+        , sum(case when order_type = '3P-GENERAL' then daily_delivery_cost end) as rider_cost_3p_general
+        , sum(case when order_type = '3P-GENERAL' then daily_coupon_cost end) as coupon_cost_3p_general
+        , sum(case when order_type = '3P-GENERAL' then daily_curation_fee end) as curation_fee_3p_general
+        , sum(case when order_type = '3P-GENERAL' then daily_additional_settlement end) as additional_settlement_3p_general
+        , sum(case when order_type = '3P-GENERAL' then daily_pg_fee end) as pg_fee_3p_general
+        , sum(case when order_type = '3P-777' then daily_gmv end) as gmv_3p_777
+        , sum(case when order_type = '3P-777' then daily_orders end) as orders_3p_777
+        , sum(case when order_type = '3P-777' then daily_revenue end) as revenue_3p_777
+        , sum(case when order_type = '3P-777' then daily_delivery_cost end) as rider_cost_3p_777
+        , sum(case when order_type = '3P-777' then daily_coupon_cost end) as coupon_cost_3p_777
+        , sum(case when order_type = '3P-777' then daily_curation_fee end) as curation_fee_3p_777
+        , sum(case when order_type = '3P-777' then daily_additional_settlement end) as additional_settlement_3p_777
+        , sum(case when order_type = '3P-777' then daily_pg_fee end) as pg_fee_3p_777
+        , sum(case when order_type = '3P-119' then daily_gmv end) as gmv_3p_119
+        , sum(case when order_type = '3P-119' then daily_orders end) as orders_3p_119
+        , sum(case when order_type = '3P-119' then daily_revenue end) as revenue_3p_119
+        , sum(case when order_type = '3P-119' then daily_delivery_cost end) as rider_cost_3p_119
+        , sum(case when order_type = '3P-119' then daily_coupon_cost end) as coupon_cost_3p_119
+        , sum(case when order_type = '3P-119' then daily_curation_fee end) as curation_fee_3p_119
+        , sum(case when order_type = '3P-119' then daily_additional_settlement end) as additional_settlement_3p_119
+        , sum(case when order_type = '3P-119' then daily_pg_fee end) as pg_fee_3p_119
+        , sum(case when order_type = 'ETC' then daily_gmv end) as gmv_etc
+        , sum(case when order_type = 'ETC' then daily_orders end) as orders_etc
+        , sum(case when order_type = 'ETC' then daily_revenue end) as revenue_etc
+        , sum(case when order_type = 'ETC' then daily_delivery_cost end) as rider_cost_etc
+        , sum(case when order_type = 'ETC' then daily_coupon_cost end) as coupon_cost_etc
+        , sum(case when order_type = 'ETC' then daily_curation_fee end) as curation_fee_etc
+        , sum(case when order_type = 'ETC' then daily_additional_settlement end) as additional_settlement_etc
+        , sum(case when order_type = 'ETC' then daily_pg_fee end) as pg_fee_etc
+    FROM daily_data d
+    WHERE date >= '2025-01-01'
+    GROUP BY 1,2) a
+left join (
+    select date(dateadd(day, -(EXTRACT(dayofweek from date)+LEFT('7',1)::INT-1)%7, date)) as week, sigungu
+        , sum(subscription_amount) as subscription_amount
+    from daily_subscription_fee
+    WHERE date >= '2025-01-01'
+    group by 1,2) b on(a.week = b.week and a.sigungu = b.sigungu)
+left join (
+    select date(dateadd(day, -(EXTRACT(dayofweek from date(o.created_at))+LEFT('7',1)::INT-1)%7, date(o.created_at))) as week, o.sigungu
+        , sum(case when c.coupon_tag = 'CAC' then c.coupon_discount end) as cac_coupon_cost
+        , sum(case when c.coupon_tag = 'EVENT' then c.coupon_discount end) as event_coupon_cost
+        , sum(case when c.coupon_tag = 'NORMAL' then c.coupon_discount end) as normal_coupon_cost
+        , sum(case when c.coupon_tag = 'FIRST_ORDER' then c.coupon_discount end) as first_order_coupon_cost
+        , sum(case when c.coupon_tag = 'RESURRECTION' then c.coupon_discount end) as resurrection_coupon_cost
+    from doeat_delivery_production.orders o
+    join doeat_delivery_production.coupon c on(o.coupon_code = c.coupon_code)
+    join (select distinct order_id from doeat_delivery_production.store_book_keeping_transaction) t on(o.id = t.order_id)
+    where date(o.created_at) >= '2025-01-01'
+    group by 1,2) c on(a.week = c.week and a.sigungu = c.sigungu)
+-- where a.date = '2025-05-19'
+order by 1,2;
