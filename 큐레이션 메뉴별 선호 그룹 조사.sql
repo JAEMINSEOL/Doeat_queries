@@ -1,16 +1,24 @@
 
 SELECT
     CASE WHEN 1 THEN 1 END AS cnt,
-    {{분류}} AS menu,
+menu,
     total_order_cnt,
     male_order_cnt,
-    female_order_cnt,
-(female_order_cnt*1.0 - male_order_cnt) / (female_order_cnt + male_order_cnt) AS gender_ratio,
+        CASE
+    WHEN (female_order_cnt + male_order_cnt) = 0 THEN 0
+ELSE (female_order_cnt*1.0 - male_order_cnt) / (female_order_cnt + male_order_cnt) END AS gender_ratio,
 twenties_order_cnt,
 thirties_order_cnt,
-(thirties_order_cnt*1.0 - twenties_order_cnt) / (thirties_order_cnt + twenties_order_cnt) AS age_ratio
+CASE
+WHEN (thirties_order_cnt + twenties_order_cnt)=0 THEN 0
+ELSE (thirties_order_cnt*1.0 - twenties_order_cnt) / (thirties_order_cnt + twenties_order_cnt) END AS age_ratio
 FROM(SELECT 
-{{분류}},
+    CASE 
+    WHEN category_2='아시안-기타' THEN menu_name
+    WHEN category_2='건강식-샐러드' THEN menu_name
+    WHEN category_2='마라' THEN menu_name
+    WHEN category_2='중식-마라' THEN menu_name
+    ELSE menu_name END AS menu,
 COUNT(DISTINCT CASE WHEN 1 THEN order_id END) AS total_order_cnt,
        COUNT(DISTINCT CASE WHEN gender = 'M' THEN order_id END) AS male_order_cnt,
        COUNT(DISTINCT CASE WHEN gender = 'F' THEN order_id END) AS female_order_cnt,
@@ -57,3 +65,6 @@ ORDER BY 2 DESC) AS s
 
 WHERE total_order_cnt >= 100
 AND total_order_cnt < 1000000
+AND ABS(age_ratio) < 0.5
+AND gender_ratio >= 0.3
+ORDER BY gender_ratio DESC
