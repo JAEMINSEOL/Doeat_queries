@@ -49,7 +49,7 @@ WITH daily_product_data as (
     LEFT JOIN weekly_unit_manager_mission w2 on d.region_name = w2.region_name and w.date is null and w2.date = m.max_date
 )
 , order_menu_type as (
-    select order_id, sum(case when p.sub_type = 'SIDE' then 1 else 0 end) as pb_side_menu_count, sum(case when p.sub_type = 'MAIN' then 1 else 0 end) as pb_main_menu_count, case when pb_side_menu_count > 0 and pb_main_menu_count = 0 then 'SIDE' else 'MAIN' end as menu_type, min(o.created_at) as created_at
+    select order_id, sum(case when coalesce(p.sub_type,'MAIN') = 'SIDE' then 1 else 0 end) as pb_side_menu_count, sum(case when coalesce(p.sub_type,'MAIN') = 'MAIN' then 1 else 0 end) as pb_main_menu_count, case when pb_side_menu_count > 0 and pb_main_menu_count = 0 then 'SIDE' else 'MAIN' end as menu_type, min(o.created_at) as created_at
     from doeat_delivery_production.orders o
     join doeat_delivery_production.item i on(i.order_id = o.id)
     left join doeat_delivery_production.doeat_777_product p on(i.product_id = p.id)
@@ -103,8 +103,8 @@ WITH daily_product_data as (
                 , greatest(a.rider_cost_after_17+case when a.date >= '2025-04-29' then 0 else a.order_count_after_17*coalesce(unit_rider_promotion_cost,200)+order_count_before_17*coalesce(unit_swat_manager_mission_cost,200) end, ceiling(b.total_operation_time_after_16*base_hourly_wage_after_16/100)*100) as rider_cost_after_16
                 , rider_cost_after_16*a.order_count_after_17_main*1.0/nullif(a.order_count_after_17,0) as rider_cost_after_16_main
                 , rider_cost_after_16*a.order_count_after_17_side*1.0/nullif(a.order_count_after_17,0) as rider_cost_after_16_side
-                , rider_cost_before_16_main + rider_cost_after_16_main as rider_cost_main
-                , rider_cost_before_16_side + rider_cost_after_16_side as rider_cost_side
+                , coalesce(rider_cost_before_16_main,0) + coalesce(rider_cost_after_16_main,0) as rider_cost_main
+                , coalesce(rider_cost_before_16_side,0) + coalesce(rider_cost_after_16_side,0) as rider_cost_side
             from baro_rider_cost a
             left join baro_rider_base_cost b on(a.date = b.date and a.rider_id = b.rider_id and a.sigungu = b.sigungu)
             left join (
@@ -227,7 +227,7 @@ WITH daily_product_data as (
     group by 1,2
 )
 
-SELECT a.week, a.sigungu
+SELECT a.date, a.sigungu
     , coalesce(gmv_3p_777,0) + coalesce(gmv_3p_119,0) + coalesce(gmv_3p_general,0) + coalesce(gmv_1p_main,0) + coalesce(gmv_1p_side,0) + coalesce(gmv_etc,0) + coalesce(curation_fee,0) + coalesce(subscription_amount,0) as gtv_total
     , gmv_3p_777
     , gmv_3p_119
@@ -283,9 +283,9 @@ SELECT a.week, a.sigungu
     , coupon_cost_1p_side
     , coupon_cost_etc
 
-    , gmv_1p_main * 0.6 + gmv_1p_side * 0.6 as cogs_1p
-    , gmv_1p_main * 0.6 as cogs_1p_main
-    , gmv_1p_side * 0.6 as cogs_1p_side
+    , gmv_1p_main * case when date_trunc('month',a.date) <= '2025-04-01' then 0.8 else 0.6 end + gmv_1p_side * case when date_trunc('month',a.date) <= '2025-04-01' then 0.8 else 0.6 end as cogs_1p
+    , gmv_1p_main * case when date_trunc('month',a.date) <= '2025-04-01' then 0.8 else 0.6 end as cogs_1p_main
+    , gmv_1p_side * case when date_trunc('month',a.date) <= '2025-04-01' then 0.8 else 0.6 end as cogs_1p_side
 
     , revenue_total - rider_cost_total - pg_fee_total - additional_settlement_total - coupon_cost_total - coalesce(cogs_1p,0) as contribution_margin
     , (revenue_total_without_subscription - coalesce(cogs_1p,0))/orders as unit_income
@@ -304,82 +304,155 @@ SELECT a.week, a.sigungu
     , orders_1p_main
     , orders_1p_side
 from (
-    select date(dateadd(day, -(EXTRACT(dayofweek from date)+LEFT('7',1)::INT-1)%7, date)) as week, sigungu
-        , sum(daily_gmv) as gmv
-        , sum(daily_orders) as orders
-        , sum(daily_revenue) as revenue
-        , sum(daily_delivery_cost) as rider_cost
-        , sum(daily_coupon_cost) as coupon_cost
-        , sum(daily_curation_fee) as curation_fee
-        , sum(daily_additional_settlement) as additional_settlement
-        , sum(daily_pg_fee) as pg_fee
-        , sum(case when order_type like '1P%' then daily_gmv end) as gmv_1p
-        , sum(case when order_type like '1P%' then daily_orders end) as orders_1p
-        , sum(case when order_type like '1P%' then daily_gmv end) as revenue_1p
-        , sum(case when order_type like '1P%' then daily_delivery_cost end) as rider_cost_1p
-        , sum(case when order_type like '1P%' then daily_coupon_cost end) as coupon_cost_1p
-        , sum(case when order_type like '1P%' then daily_curation_fee end) as curation_fee_1p
-        , sum(case when order_type like '1P%' then daily_additional_settlement end) as additional_settlement_1p
-        , sum(case when order_type like '1P%' then daily_pg_fee end) as pg_fee_1p
-        , sum(case when order_type = '1P-MAIN' then daily_gmv end) as gmv_1p_main
-        , sum(case when order_type = '1P-MAIN' then daily_orders end) as orders_1p_main
-        , sum(case when order_type = '1P-MAIN' then daily_revenue end) as revenue_1p_main
-        , sum(case when order_type = '1P-MAIN' then daily_delivery_cost end) as rider_cost_1p_main
-        , sum(case when order_type = '1P-MAIN' then daily_coupon_cost end) as coupon_cost_1p_main
-        , sum(case when order_type = '1P-MAIN' then daily_curation_fee end) as curation_fee_1p_main
-        , sum(case when order_type = '1P-MAIN' then daily_additional_settlement end) as additional_settlement_1p_main
-        , sum(case when order_type = '1P-MAIN' then daily_pg_fee end) as pg_fee_1p_main
-        , sum(case when order_type = '1P-SIDE' then daily_gmv end) as gmv_1p_side
-        , sum(case when order_type = '1P-SIDE' then daily_orders end) as orders_1p_side
-        , sum(case when order_type = '1P-SIDE' then daily_revenue end) as revenue_1p_side
-        , sum(case when order_type = '1P-SIDE' then daily_delivery_cost end) as rider_cost_1p_side
-        , sum(case when order_type = '1P-SIDE' then daily_coupon_cost end) as coupon_cost_1p_side
-        , sum(case when order_type = '1P-SIDE' then daily_curation_fee end) as curation_fee_1p_side
-        , sum(case when order_type = '1P-SIDE' then daily_additional_settlement end) as additional_settlement_1p_side
-        , sum(case when order_type = '1P-SIDE' then daily_pg_fee end) as pg_fee_1p_side
-        , sum(case when order_type = '3P-GENERAL' then daily_gmv end) as gmv_3p_general
-        , sum(case when order_type = '3P-GENERAL' then daily_orders end) as orders_3p_general
-        , sum(case when order_type = '3P-GENERAL' then daily_revenue end) as revenue_3p_general
-        , sum(case when order_type = '3P-GENERAL' then daily_delivery_cost end) as rider_cost_3p_general
-        , sum(case when order_type = '3P-GENERAL' then daily_coupon_cost end) as coupon_cost_3p_general
-        , sum(case when order_type = '3P-GENERAL' then daily_curation_fee end) as curation_fee_3p_general
-        , sum(case when order_type = '3P-GENERAL' then daily_additional_settlement end) as additional_settlement_3p_general
-        , sum(case when order_type = '3P-GENERAL' then daily_pg_fee end) as pg_fee_3p_general
-        , sum(case when order_type = '3P-777' then daily_gmv end) as gmv_3p_777
-        , sum(case when order_type = '3P-777' then daily_orders end) as orders_3p_777
-        , sum(case when order_type = '3P-777' then daily_revenue end) as revenue_3p_777
-        , sum(case when order_type = '3P-777' then daily_delivery_cost end) as rider_cost_3p_777
-        , sum(case when order_type = '3P-777' then daily_coupon_cost end) as coupon_cost_3p_777
-        , sum(case when order_type = '3P-777' then daily_curation_fee end) as curation_fee_3p_777
-        , sum(case when order_type = '3P-777' then daily_additional_settlement end) as additional_settlement_3p_777
-        , sum(case when order_type = '3P-777' then daily_pg_fee end) as pg_fee_3p_777
-        , sum(case when order_type = '3P-119' then daily_gmv end) as gmv_3p_119
-        , sum(case when order_type = '3P-119' then daily_orders end) as orders_3p_119
-        , sum(case when order_type = '3P-119' then daily_revenue end) as revenue_3p_119
-        , sum(case when order_type = '3P-119' then daily_delivery_cost end) as rider_cost_3p_119
-        , sum(case when order_type = '3P-119' then daily_coupon_cost end) as coupon_cost_3p_119
-        , sum(case when order_type = '3P-119' then daily_curation_fee end) as curation_fee_3p_119
-        , sum(case when order_type = '3P-119' then daily_additional_settlement end) as additional_settlement_3p_119
-        , sum(case when order_type = '3P-119' then daily_pg_fee end) as pg_fee_3p_119
-        , sum(case when order_type = 'ETC' then daily_gmv end) as gmv_etc
-        , sum(case when order_type = 'ETC' then daily_orders end) as orders_etc
-        , sum(case when order_type = 'ETC' then daily_revenue end) as revenue_etc
-        , sum(case when order_type = 'ETC' then daily_delivery_cost end) as rider_cost_etc
-        , sum(case when order_type = 'ETC' then daily_coupon_cost end) as coupon_cost_etc
-        , sum(case when order_type = 'ETC' then daily_curation_fee end) as curation_fee_etc
-        , sum(case when order_type = 'ETC' then daily_additional_settlement end) as additional_settlement_etc
-        , sum(case when order_type = 'ETC' then daily_pg_fee end) as pg_fee_etc
-    FROM daily_data d
-    WHERE date >= '2025-01-01'
-    GROUP BY 1,2) a
+    select date, sigungu
+        , sum(gmv) as gmv
+        , sum(orders) as orders
+        , sum(revenue) as revenue
+        , sum(rider_cost) as rider_cost
+        , sum(coupon_cost) as coupon_cost
+        , sum(curation_fee) as curation_fee
+        , sum(additional_settlement) as additional_settlement
+        , sum(pg_fee) as pg_fee
+        , sum(gmv_1p) as gmv_1p
+        , sum(orders_1p) as orders_1p
+        , sum(revenue_1p) as revenue_1p
+        , sum(rider_cost_1p) as rider_cost_1p
+        , sum(coupon_cost_1p) as coupon_cost_1p
+        , sum(curation_fee_1p) as curation_fee_1p
+        , sum(additional_settlement_1p) as additional_settlement_1p
+        , sum(pg_fee_1p) as pg_fee_1p
+        , sum(cogs_1p) as cogs_1p
+        , sum(gmv_1p_main) as gmv_1p_main
+        , sum(orders_1p_main) as orders_1p_main
+        , sum(revenue_1p_main) as revenue_1p_main
+        , sum(rider_cost_1p_main) as rider_cost_1p_main
+        , sum(coupon_cost_1p_main) as coupon_cost_1p_main
+        , sum(curation_fee_1p_main) as curation_fee_1p_main
+        , sum(additional_settlement_1p_main) as additional_settlement_1p_main
+        , sum(pg_fee_1p_main) as pg_fee_1p_main
+        , sum(cogs_1p_main) as cogs_1p_main
+        , sum(gmv_1p_side) as gmv_1p_side
+        , sum(orders_1p_side) as orders_1p_side
+        , sum(revenue_1p_side) as revenue_1p_side
+        , sum(rider_cost_1p_side) as rider_cost_1p_side
+        , sum(coupon_cost_1p_side) as coupon_cost_1p_side
+        , sum(curation_fee_1p_side) as curation_fee_1p_side
+        , sum(additional_settlement_1p_side) as additional_settlement_1p_side
+        , sum(pg_fee_1p_side) as pg_fee_1p_side
+        , sum(cogs_1p_side) as cogs_1p_side
+        , sum(gmv_3p_general) as gmv_3p_general
+        , sum(orders_3p_general) as orders_3p_general
+        , sum(revenue_3p_general) as revenue_3p_general
+        , sum(rider_cost_3p_general) as rider_cost_3p_general
+        , sum(coupon_cost_3p_general) as coupon_cost_3p_general
+        , sum(curation_fee_3p_general) as curation_fee_3p_general
+        , sum(additional_settlement_3p_general) as additional_settlement_3p_general
+        , sum(pg_fee_3p_general) as pg_fee_3p_general
+        , sum(gmv_3p_777) as gmv_3p_777
+        , sum(orders_3p_777) as orders_3p_777
+        , sum(revenue_3p_777) as revenue_3p_777
+        , sum(rider_cost_3p_777) as rider_cost_3p_777
+        , sum(coupon_cost_3p_777) as coupon_cost_3p_777
+        , sum(curation_fee_3p_777) as curation_fee_3p_777
+        , sum(additional_settlement_3p_777) as additional_settlement_3p_777
+        , sum(pg_fee_3p_777) as pg_fee_3p_777
+        , sum(gmv_3p_119) as gmv_3p_119
+        , sum(orders_3p_119) as orders_3p_119
+        , sum(revenue_3p_119) as revenue_3p_119
+        , sum(rider_cost_3p_119) as rider_cost_3p_119
+        , sum(coupon_cost_3p_119) as coupon_cost_3p_119
+        , sum(curation_fee_3p_119) as curation_fee_3p_119
+        , sum(additional_settlement_3p_119) as additional_settlement_3p_119
+        , sum(pg_fee_3p_119) as pg_fee_3p_119
+        , sum(gmv_etc) as gmv_etc
+        , sum(orders_etc) as orders_etc
+        , sum(revenue_etc) as revenue_etc
+        , sum(rider_cost_etc) as rider_cost_etc
+        , sum(coupon_cost_etc) as coupon_cost_etc
+        , sum(curation_fee_etc) as curation_fee_etc
+        , sum(additional_settlement_etc) as additional_settlement_etc
+        , sum(pg_fee_etc) as pg_fee_etc
+    from (
+        select date, sigungu
+            , sum(daily_gmv) as gmv
+            , sum(daily_orders) as orders
+            , sum(daily_revenue) as revenue
+            , sum(daily_delivery_cost) as rider_cost
+            , sum(daily_coupon_cost) as coupon_cost
+            , sum(daily_curation_fee) as curation_fee
+            , sum(daily_additional_settlement) as additional_settlement
+            , sum(daily_pg_fee) as pg_fee
+            , sum(case when order_type like '1P%' then daily_gmv end) as gmv_1p
+            , sum(case when order_type like '1P%' then daily_orders end) as orders_1p
+            , sum(case when order_type like '1P%' then daily_gmv end) as revenue_1p
+            , sum(case when order_type like '1P%' then daily_delivery_cost end) as rider_cost_1p
+            , sum(case when order_type like '1P%' then daily_coupon_cost end) as coupon_cost_1p
+            , sum(case when order_type like '1P%' then daily_curation_fee end) as curation_fee_1p
+            , sum(case when order_type like '1P%' then daily_additional_settlement end) as additional_settlement_1p
+            , sum(case when order_type like '1P%' then daily_pg_fee end) as pg_fee_1p
+            , sum(case when order_type like '1P%' then daily_gmv end) * case when date_trunc('month',date) <= '2025-04-01' then 0.8 else 0.6 end as cogs_1p
+            , sum(case when order_type = '1P-MAIN' then daily_gmv end) as gmv_1p_main
+            , sum(case when order_type = '1P-MAIN' then daily_orders end) as orders_1p_main
+            , sum(case when order_type = '1P-MAIN' then daily_revenue end) as revenue_1p_main
+            , sum(case when order_type = '1P-MAIN' then daily_delivery_cost end) as rider_cost_1p_main
+            , sum(case when order_type = '1P-MAIN' then daily_coupon_cost end) as coupon_cost_1p_main
+            , sum(case when order_type = '1P-MAIN' then daily_curation_fee end) as curation_fee_1p_main
+            , sum(case when order_type = '1P-MAIN' then daily_additional_settlement end) as additional_settlement_1p_main
+            , sum(case when order_type = '1P-MAIN' then daily_pg_fee end) as pg_fee_1p_main
+            , sum(case when order_type = '1P-MAIN' then daily_gmv end) * case when date_trunc('month',date) <= '2025-04-01' then 0.8 else 0.6 end as cogs_1p_main
+            , sum(case when order_type = '1P-SIDE' then daily_gmv end) as gmv_1p_side
+            , sum(case when order_type = '1P-SIDE' then daily_orders end) as orders_1p_side
+            , sum(case when order_type = '1P-SIDE' then daily_revenue end) as revenue_1p_side
+            , sum(case when order_type = '1P-SIDE' then daily_delivery_cost end) as rider_cost_1p_side
+            , sum(case when order_type = '1P-SIDE' then daily_coupon_cost end) as coupon_cost_1p_side
+            , sum(case when order_type = '1P-SIDE' then daily_curation_fee end) as curation_fee_1p_side
+            , sum(case when order_type = '1P-SIDE' then daily_additional_settlement end) as additional_settlement_1p_side
+            , sum(case when order_type = '1P-SIDE' then daily_pg_fee end) as pg_fee_1p_side
+            , sum(case when order_type = '1P-SIDE' then daily_gmv end) * case when date_trunc('month',date) <= '2025-04-01' then 0.8 else 0.6 end as cogs_1p_side
+            , sum(case when order_type = '3P-GENERAL' then daily_gmv end) as gmv_3p_general
+            , sum(case when order_type = '3P-GENERAL' then daily_orders end) as orders_3p_general
+            , sum(case when order_type = '3P-GENERAL' then daily_revenue end) as revenue_3p_general
+            , sum(case when order_type = '3P-GENERAL' then daily_delivery_cost end) as rider_cost_3p_general
+            , sum(case when order_type = '3P-GENERAL' then daily_coupon_cost end) as coupon_cost_3p_general
+            , sum(case when order_type = '3P-GENERAL' then daily_curation_fee end) as curation_fee_3p_general
+            , sum(case when order_type = '3P-GENERAL' then daily_additional_settlement end) as additional_settlement_3p_general
+            , sum(case when order_type = '3P-GENERAL' then daily_pg_fee end) as pg_fee_3p_general
+            , sum(case when order_type = '3P-777' then daily_gmv end) as gmv_3p_777
+            , sum(case when order_type = '3P-777' then daily_orders end) as orders_3p_777
+            , sum(case when order_type = '3P-777' then daily_revenue end) as revenue_3p_777
+            , sum(case when order_type = '3P-777' then daily_delivery_cost end) as rider_cost_3p_777
+            , sum(case when order_type = '3P-777' then daily_coupon_cost end) as coupon_cost_3p_777
+            , sum(case when order_type = '3P-777' then daily_curation_fee end) as curation_fee_3p_777
+            , sum(case when order_type = '3P-777' then daily_additional_settlement end) as additional_settlement_3p_777
+            , sum(case when order_type = '3P-777' then daily_pg_fee end) as pg_fee_3p_777
+            , sum(case when order_type = '3P-119' then daily_gmv end) as gmv_3p_119
+            , sum(case when order_type = '3P-119' then daily_orders end) as orders_3p_119
+            , sum(case when order_type = '3P-119' then daily_revenue end) as revenue_3p_119
+            , sum(case when order_type = '3P-119' then daily_delivery_cost end) as rider_cost_3p_119
+            , sum(case when order_type = '3P-119' then daily_coupon_cost end) as coupon_cost_3p_119
+            , sum(case when order_type = '3P-119' then daily_curation_fee end) as curation_fee_3p_119
+            , sum(case when order_type = '3P-119' then daily_additional_settlement end) as additional_settlement_3p_119
+            , sum(case when order_type = '3P-119' then daily_pg_fee end) as pg_fee_3p_119
+            , sum(case when order_type = 'ETC' then daily_gmv end) as gmv_etc
+            , sum(case when order_type = 'ETC' then daily_orders end) as orders_etc
+            , sum(case when order_type = 'ETC' then daily_revenue end) as revenue_etc
+            , sum(case when order_type = 'ETC' then daily_delivery_cost end) as rider_cost_etc
+            , sum(case when order_type = 'ETC' then daily_coupon_cost end) as coupon_cost_etc
+            , sum(case when order_type = 'ETC' then daily_curation_fee end) as curation_fee_etc
+            , sum(case when order_type = 'ETC' then daily_additional_settlement end) as additional_settlement_etc
+            , sum(case when order_type = 'ETC' then daily_pg_fee end) as pg_fee_etc
+        FROM daily_data d
+        WHERE date >= '2025-01-01'
+        GROUP BY 1,2) a
+    group by 1,2) a
 left join (
-    select date(dateadd(day, -(EXTRACT(dayofweek from date)+LEFT('7',1)::INT-1)%7, date)) as week, sigungu
+    select date, sigungu
         , sum(subscription_amount) as subscription_amount
     from daily_subscription_fee
     WHERE date >= '2025-01-01'
-    group by 1,2) b on(a.week = b.week and a.sigungu = b.sigungu)
+    group by 1,2) b on(a.date = b.date and a.sigungu = b.sigungu)
 left join (
-    select date(dateadd(day, -(EXTRACT(dayofweek from date(o.created_at))+LEFT('7',1)::INT-1)%7, date(o.created_at))) as week, o.sigungu
+    select date(o.created_at) as date, o.sigungu
         , sum(case when c.coupon_tag = 'CAC' then c.coupon_discount end) as cac_coupon_cost
         , sum(case when c.coupon_tag = 'EVENT' then c.coupon_discount end) as event_coupon_cost
         , sum(case when c.coupon_tag = 'NORMAL' then c.coupon_discount end) as normal_coupon_cost
@@ -389,6 +462,5 @@ left join (
     join doeat_delivery_production.coupon c on(o.coupon_code = c.coupon_code)
     join (select distinct order_id from doeat_delivery_production.store_book_keeping_transaction) t on(o.id = t.order_id)
     where date(o.created_at) >= '2025-01-01'
-    group by 1,2) c on(a.week = c.week and a.sigungu = c.sigungu)
--- where a.date = '2025-05-19'
+    group by 1,2) c on(a.date = c.date and a.sigungu = c.sigungu)
 order by 1,2;
