@@ -5,7 +5,7 @@ with menu_table as (
         -- 태그 생성: 키워드가 있으면 해당 태그 추가
         trim(
             case when position('고기' in menu_name) > 0 then '고기,' else '' end ||
-            case when position('소고기' in menu_name) > 0 then '소고기,' else '' end ||
+            case when position('소고기' in menu_name) > 0 or position('비프' in menu_name) > 0 then '소고기,' else '' end ||
             case when position('돼지' in menu_name) > 0 then '돼지,' else '' end ||
             case when position('양고기' in menu_name) > 0 or position('양꼬치' in menu_name) > 0 then '양고기,' else '' end ||
             case when position('햄' in menu_name) > 0 then '햄,' else '' end ||
@@ -24,18 +24,20 @@ with menu_table as (
             case when position('곱창' in menu_name) > 0 then '곱창,' else '' end ||
             case when position('스테이크' in menu_name) > 0 then '스테이크,' else '' end ||
             case when position('베이컨' in menu_name) > 0 then '베이컨,' else '' end ||
-            case when position('곰탕' in menu_name) > 0 then '곰탕,' else '' end ||
+            case when position('곰탕' in menu_name) > 0 or position('설렁탕' in menu_name) > 0 then '곰탕,' else '' end ||
 
             case when position('닭' in menu_name) > 0 then '닭,' else '' end ||
             case when position('닭갈비' in menu_name) > 0 then '닭갈비,' else '' end ||
             case when position('닭도리탕' in menu_name) > 0 then '닭도리탕,' else '' end ||
-            case when position('치킨' in menu_name) > 0 then '치킨,' else '' end ||
+            case when position('치킨' in menu_name) > 0 or position('반마리' in menu_name) > 0 or position('한마리' in menu_name) > 0 then '치킨,' else '' end ||
             case when position('순살' in menu_name) > 0 then '순살,' else '' end ||
             case when position('닭강정' in menu_name) > 0 then '닭강정,' else '' end ||
             case when position('닭가슴살' in menu_name) > 0 then '닭가슴살,' else '' end ||
             case when position('닭발' in menu_name) > 0 then '닭발,' else '' end ||
             case when position('오리' in menu_name) > 0 then '오리고기,' else '' end ||
 
+            case when position('볶음밥' in menu_name) > 0 then '볶음밥,' else '' end ||
+            case when position('죽' in menu_name) > 0 then '죽,' else '' end ||
             case when position('비빔밥' in menu_name) > 0 then '비빔밥,' else '' end ||
             case when position('찌개' in menu_name) > 0 then '찌개,' else '' end ||
             case when position('국밥' in menu_name) > 0 then '국밥,' else '' end ||
@@ -44,12 +46,15 @@ with menu_table as (
             case when position('순두부' in menu_name) > 0 then '순두부,' else '' end ||
             case when position('주먹밥' in menu_name) > 0 then '주먹밥,' else '' end ||
             case when position('덮밥' in menu_name) > 0 then '덮밥,' else '' end ||
+            case when position('카레' in menu_name) > 0 then '카레,' else '' end ||
+            case when position('만두' in menu_name) > 0 then '만두,' else '' end ||
             
             case when position('장어' in menu_name) > 0 then '장어,' else '' end ||
-            case when position('연어' in menu_name) > 0 then '연어,' else '' end ||
+            case when position('연어' in menu_name) > 0 or position('사케' in menu_name) > 0 then '연어,' else '' end ||
             case when position('참치' in menu_name) > 0 then '참치,' else '' end ||
             case when position('새우' in menu_name) > 0 or position('쉬림프' in menu_name) > 0 or position('에비' in menu_name) > 0 then '새우,' else '' end ||
-            case when position('회' in menu_name) > 0 or position('광어' in menu_name) > 0 or position('방어' in menu_name) > 0 then '회,' else '' end ||
+            case when position('회' in menu_name) > 0 or position('광어' in menu_name) > 0 
+            or position('방어' in menu_name) > 0 or position('사시미' in menu_name) > 0 then '회,' else '' end ||
             case when position('초밥' in menu_name) > 0 then '초밥,' else '' end ||
             case when position('롤' in menu_name) > 0 then '롤,' else '' end ||
             
@@ -78,22 +83,27 @@ with menu_table as (
             case when position('브런치' in menu_name) > 0 then '브런치,' else '' end ||
             case when position('부리또' in menu_name) > 0 or position('브리또' in menu_name) > 0 then '부리또,' else '' end ||
             case when position('샌드위치' in menu_name) > 0 then '샌드위치,' else '' end ||
-            case when position('아보카도' in menu_name) > 0 then '아보카도,' else '' end ||
             case when position('에그' in menu_name) > 0 then '에그,' else '' end ||
             case when position('반미' in menu_name) > 0 then '반미,' else '' end ||
-            case when position('바질' in menu_name) > 0 then '바질,' else '' end ||
             case when position('스프' in menu_name) > 0 then '스프,' else '' end ||
             case when position('오트' in menu_name) > 0 then '오트,' else '' end ||
-            case when position('씨푸드' in menu_name) > 0 then '씨푸드,' else '' end ||
             case when position('키토' in menu_name) > 0 then '키토,' else '' end ||
+            case when position('두부' in menu_name) > 0 then '두부,' else '' end ||
+            case when position('크래미' in menu_name) > 0 then '크래미,' else '' end ||
+            case when position('통밀' in menu_name) > 0 then '통밀,' else '' end ||
+            case when position('타코 ' in menu_name) > 0 then '타코,' else '' end ||
 
             case when position('잠봉' in menu_name) > 0 then '잠봉뵈르,' else '' end ||
             case when position('루꼴라' in menu_name) > 0 then '루꼴라,' else '' end ||
+            case when position('아보카도' in menu_name) > 0 or position('과카몰리' in menu_name) > 0 then '아보카도,' else '' end ||
+            case when position('하바네로' in menu_name) > 0 then '하바네로,' else '' end ||
+            case when position('바질' in menu_name) > 0 then '바질,' else '' end ||
             case when position('명란' in menu_name) > 0 then '명란,' else '' end ||
             case when position('치즈' in menu_name) > 0 then '치즈,' else '' end ||
             case when position('크림' in menu_name) > 0 then '크림,' else '' end ||
             case when position('로제' in menu_name) > 0 then '로제,' else '' end ||
             case when position('오일' in menu_name) > 0 then '오일,' else '' end ||
+            case when position('페퍼로니' in menu_name) > 0 then '페퍼로니,' else '' end ||
             
             case when position('치아바타' in menu_name) > 0 then '치아바타,' else '' end ||
             case when position('크로아상' in menu_name) > 0 or position('크루아상' in menu_name) > 0 then '크루아상,' else '' end ||
@@ -108,6 +118,7 @@ with menu_table as (
             case when position('누텔라' in menu_name) > 0 then '누텔라,' else '' end ||
             case when position('초코' in menu_name) > 0 then '초코,' else '' end ||
             case when position('딸기' in menu_name) > 0 then '딸기,' else '' end ||
+            case when position('바나나' in menu_name) > 0 or position('나나' in menu_name) > 0 then '바나나,' else '' end ||
             case when position('레몬' in menu_name) > 0 then '레몬,' else '' end ||
             case when position('라임' in menu_name) > 0 then '라임,' else '' end ||
             case when position('수박' in menu_name) > 0 then '수박,' else '' end ||
@@ -129,15 +140,11 @@ with menu_table as (
             case when position('팟타이' in menu_name) > 0 then '팟타이,' else '' end ||
             case when position('푸팟퐁' in menu_name) > 0 then '푸팟퐁,' else '' end ||
             case when position('똠얌꿍' in menu_name) > 0 then '똠얌꿍,' else '' end ||
+            case when position('분짜' in menu_name) > 0 then '분짜,' else '' end ||
               
             case when position('지중해' in menu_name) > 0 then '지중해,' else '' end ||
             case when position('멕시칸' in menu_name) > 0 then '멕시칸,' else '' end ||
             case when position('그릭' in menu_name) > 0 then '그릭,' else '' end ||
-            case when position('베트남' in menu_name) > 0 then '베트남,' else '' end ||
-            case when position('타이' in menu_name) > 0 then '타이,' else '' end ||
-            case when position('뉴욕' in menu_name) > 0 then '뉴욕,' else '' end ||
-            case when position('프랑스' in menu_name) > 0 then '프랑스,' else '' end ||
-            case when position('시카고' in menu_name) > 0 then '시카고,' else '' end ||
             case when position('하바네로' in menu_name) > 0 then '하바네로,' else '' end
            
             ,  ','
@@ -198,13 +205,13 @@ select
     male_order_cnt,
     case
         when (female_order_cnt + male_order_cnt) = 0 then 0
-        else (female_order_cnt * 100.0) / (female_order_cnt + male_order_cnt)
+        else round((female_order_cnt * 100.0) / (female_order_cnt + male_order_cnt),2)
     end as gender_ratio,
     twenties_order_cnt,
     thirties_order_cnt,
     case
         when (thirties_order_cnt + twenties_order_cnt) = 0 then 0
-        else (thirties_order_cnt * 100.0) / (thirties_order_cnt + twenties_order_cnt)
+        else round((thirties_order_cnt * 100.0) / (thirties_order_cnt + twenties_order_cnt),2)
     end as age_ratio
 from (
     select
