@@ -1,11 +1,11 @@
-WITH enter_data as ( 
+with enter_data as (
     select distinct dt::date as date, a.user_id, b.sigungu
     from service_log.user_log a
     join doeat_delivery_production.user_address b on(a.user_id = b.user_id)
     join (select distinct name from doeat_delivery_production.hdong where sigungu_id in (1,2)) c on(b.hname = c.name)
     where dt >= '2025-02-01'
       and is_main_address = 1
-      and sigungu IN ('관악구', '동작구')
+      and sigungu in ('관악구', '동작구')
 )
 , 
 order_data as ( 
@@ -21,12 +21,12 @@ order_data as (
         , count(distinct case when type = 'TEAMORDER' then o.id end) as order_cnt_3p_general
         , count(distinct case when type != 'TEAMORDER' and type != 'CURATION_PB' then o.id end) as order_cnt_3p_curation
     from doeat_delivery_production.orders o
-    JOIN doeat_delivery_production.team_order t ON o.team_order_id = t.id
+    join doeat_delivery_production.team_order t on o.team_order_id = t.id
     where date(o.created_at) >= '2025-02-01'
-      and o.sigungu IN ('관악구', '동작구')
-      AND o.delivered_at IS NOT NULL
-      AND t.is_test_team_order = 0
-      AND o.paid_at IS NOT NULL      
+      and o.sigungu in ('관악구', '동작구')
+      and o.delivered_at is not null
+      and t.is_test_team_order = 0
+      and o.paid_at is not null
       and orderyn = 1
     group by 1,2,3
 )
@@ -44,14 +44,7 @@ bc as (
         , count(distinct case when b.order_cnt_1p > 0 then b.user_id end) as user_cnt_order_1p
         , count(distinct case when order_cnt_3p_general > 0 then b.user_id end) as user_cnt_order_3p_general
         , count(distinct case when order_cnt_3p_curation > 0 then b.user_id end) as user_cnt_order_3p_curation
-        , user_cnt_order*100.0/NULLIF(user_cnt_enter,0) as bc
-        , user_cnt_order_3p_777*100.0/NULLIF(user_cnt_enter,0) as bc_3p_today
-        , user_cnt_order_3p_119*100.0/NULLIF(user_cnt_enter,0) as bc_3p_special
-        , user_cnt_order_3p_green*100.0/NULLIF(user_cnt_enter,0) as bc_3p_green
-        , user_cnt_order_3p_dessert*100.0/NULLIF(user_cnt_enter,0) as bc_3p_dessert        
-        , user_cnt_order_1p*100.0/NULLIF(user_cnt_enter,0) as bc_1p_amazing
-        , user_cnt_order_3p_general*100.0/NULLIF(user_cnt_enter,0) as bc_3p_general
-        , user_cnt_order_3p_curation*100.0/NULLIF(user_cnt_enter,0) as bc_3p_curation
+
     from enter_data a
     left join order_data b on(a.date = b.date and a.user_id = b.user_id)
     group by 1,2
@@ -115,8 +108,10 @@ enter_data_aoc as (
 )
 ,
 order_data_30d as (
-    select sigungu, 
-        sum(order_cnt) as total_order_cnt_30d
+    select
+        date
+        , sigungu
+        , sum(order_cnt) as total_order_cnt_30d
     from (
         select date(a.created_at) as date
             , a.sigungu  
@@ -134,23 +129,25 @@ order_data_30d as (
           and a.orderyn = 1
         group by 1, 2  
         )
-    group by 1  
+    group by 1,2
 )
 ,
 aoc_calc as (
-    SELECT
+    select
         e.date,
         e.sigungu, 
         e.user_cnt*100.0 / NULLIF(d.total_order_cnt_30d, 0) as aoc
-    FROM enter_data_aoc e
-    JOIN order_data_30d d on e.sigungu = d.sigungu  
+    from enter_data_aoc e
+    join order_data_30d d on e.sigungu = d.sigungu and e.date = d.date
 )
 ,
+
+-- 주간 활성화 멤버십 유저 수 집계를 위한 CTE
 mbs_activation_week as(
     select a.date
             , a.user_id
             , a.sigungu
-            , order_cnt_1p, order_cnt_3p_777, order_cnt_3p_119
+            , b.order_cnt_1p, order_cnt_3p_777, order_cnt_3p_119
     from (select *
               from (select date::date
                 , a.user_id
@@ -158,15 +155,15 @@ mbs_activation_week as(
                 , rank() over(partition by date order by date desc) as rn
             from doeat_data_mart.mart_membership a
             join doeat_delivery_production.user_address b on a.user_id = b.user_id
-            where a.user_type = '실질해지자') a where rn=1) a
+            where a.user_type = '유료이용자') a where rn=1) a
     left join (select o.date
+                    , o.sigungu
                     , o.user_id
-                    , sum(o.order_cnt_1p) as order_cnt_1p
-                    , sum(o.order_cnt_3p_777) as order_cnt_3p_777
-                    , sum(o.order_cnt_3p_119) as order_cnt_3p_119
+                    , order_cnt_1p
+                    , order_cnt_3p_777
+                    , order_cnt_3p_119
                from order_data o
-               group by 1,2
-               ) b on a.date = b.date and a.user_id = b.user_id
+               ) b on a.date = b.date and a.user_id = b.user_id and a.sigungu = b.sigungu
 )
     ,
 user_1p as (
@@ -198,31 +195,40 @@ select a.date
 )
 ,
 daily_data as (
-    select a.date::date as start_date,
-           a.date::date as end_date,
-           a.date,
-           '일' as period,
-           a.sigungu,
+    select a.date::date as start_date
+            , a.date::date as end_date
+            , a.date
+            , '일' as period
+            , a.sigungu
+            , user_cnt_enter
+            , user_cnt_order
+            , user_cnt_order_3p_777
+            , user_cnt_order_3p_119
+            , user_cnt_order_3p_green
+            , user_cnt_order_3p_dessert
+            , user_cnt_order_1p
+            , user_cnt_order_3p_general
+            , user_cnt_order_3p_curation
            -- BC 지표
-           a.bc,
-           a.bc_3p_today,
-           a.bc_3p_special,
-           a.bc_3p_green,
-           a.bc_3p_dessert,
-           a.bc_1p_amazing,
-           a.bc_3p_general,
-           a.bc_3p_curation,
+            , user_cnt_order*100.0/nullif(user_cnt_enter,0) as bc
+            , user_cnt_order_3p_777*100.0/nullif(user_cnt_enter,0) as bc_3p_today
+            , user_cnt_order_3p_119*100.0/nullif(user_cnt_enter,0) as bc_3p_special
+            , user_cnt_order_3p_green*100.0/nullif(user_cnt_enter,0) as bc_3p_green
+            , user_cnt_order_3p_dessert*100.0/nullif(user_cnt_enter,0) as bc_3p_dessert
+            , user_cnt_order_1p*100.0/nullif(user_cnt_enter,0) as bc_1p_amazing
+            , user_cnt_order_3p_general*100.0/nullif(user_cnt_enter,0) as bc_3p_general
+            , user_cnt_order_3p_curation*100.0/nullif(user_cnt_enter,0) as bc_3p_curation
            -- 베스트 메뉴 지표
-           b.best_store_menu_cnt_3p_777,
-           b.best_store_menu_cnt_3p_119,
-           b.retention_rate_777_prev,
-           b.retention_rate_119_prev,
-           c.super_best_menu_cnt,
+            , b.best_store_menu_cnt_3p_777
+            , b.best_store_menu_cnt_3p_119
+            , b.retention_rate_777_prev
+            , b.retention_rate_119_prev
+            , c.super_best_menu_cnt
            -- AOC 지표
-           d.aoc
+            , d.aoc
            -- PB 지표
-           , a.order_cnt_1p
-           , like_cnt*100.0 / survey_cnt as like_ratio
+            , a.order_cnt_1p
+            , like_cnt*100.0 / survey_cnt as like_ratio
             , like_cnt
             , survey_cnt
            -- 멤버십 지표
@@ -250,7 +256,7 @@ weekly_data_fri_thu AS (
     select a.start_date, a.end_date, a.period, a.sigungu,
        bc, bc_3p_today, bc_3p_special, bc_3p_green, bc_3p_dessert, bc_1p_amazing, bc_3p_general, bc_3p_curation,
        best_store_menu_cnt_3p_777, best_store_menu_cnt_3p_119, retention_rate_777_prev, retention_rate_119_prev, super_best_menu_cnt,
-       aoc, order_cnt_1p, like_ratio, order_1p_user_cnt_rate, paid_mbs_user_cnt_3p_777_twice_rate, paid_mbs_user_cnt_3p_119_once_rate
+       aoc, b.order_cnt_1p, like_ratio, order_1p_user_cnt_rate, paid_mbs_user_cnt_3p_777_twice_rate, paid_mbs_user_cnt_3p_119_once_rate
                     , paid_mbs_user_cnt_1p_once_rate
     from (
         select date(dateadd(day,-(extract(dayofweek from date::date)+left('3',1)::INT-1)%7,date::date))::date as start_date,
@@ -258,18 +264,8 @@ weekly_data_fri_thu AS (
             date,
             '주-금목' as period,
             sigungu,
-            bc,
-            bc_3p_today,
-            bc_3p_special,
-            bc_3p_green,
-            bc_3p_dessert,            
-            bc_1p_amazing,
-            bc_3p_general,
-            bc_3p_curation,
             best_store_menu_cnt_3p_777,
             best_store_menu_cnt_3p_119,
-            retention_rate_777_prev,
-            retention_rate_119_prev,
             super_best_menu_cnt,
             aoc,
             row_number() over (partition by sigungu, date(dateadd(day,-(extract(dayofweek from date::date)+left('3',1)::INT-1)%7,date::date)) order by date desc) as rn
@@ -278,15 +274,25 @@ weekly_data_fri_thu AS (
                     date(dateadd(day,-(extract(dayofweek from date::date)+left('3',1)::INT-1)%7,date::date))::date as start_date,
                     (date(dateadd(day,-(extract(dayofweek from date::date)+left('3',1)::INT-1)%7,date::date)) + interval '6 days')::date as end_date,
                         sigungu,
-                    '주-금목' as period,
-                    avg(order_cnt_1p) as order_cnt_1p,
-                    sum(like_cnt)*100.0  / sum(survey_cnt) as like_ratio,
-                    avg(order_1p_user_cnt_rate) as order_1p_user_cnt_rate
+                    '주-금목' as period
+                    , sum(user_cnt_order)*100.0/nullif(sum(user_cnt_enter),0) as bc
+                    , sum(user_cnt_order_3p_777)*100.0/nullif(sum(user_cnt_enter),0) as bc_3p_today
+                    , sum(user_cnt_order_3p_119)*100.0/nullif(sum(user_cnt_enter),0) as bc_3p_special
+                    , sum(user_cnt_order_3p_green)*100.0/nullif(sum(user_cnt_enter),0) as bc_3p_green
+                    , sum(user_cnt_order_3p_dessert)*100.0/nullif(sum(user_cnt_enter),0) as bc_3p_dessert
+                    , sum(user_cnt_order_1p)*100.0/nullif(sum(user_cnt_enter),0) as bc_1p_amazing
+                    , sum(user_cnt_order_3p_general)*100.0/nullif(sum(user_cnt_enter),0) as bc_3p_general
+                    , sum(user_cnt_order_3p_curation)*100.0/nullif(sum(user_cnt_enter),0) as bc_3p_curation
+                    , avg(retention_rate_777_prev) as retention_rate_777_prev
+                    , avg(retention_rate_119_prev) as retention_rate_119_prev
+                    , avg(d.order_cnt_1p) as order_cnt_1p
+                    , sum(like_cnt)*100.0  / nullif(sum(survey_cnt),0) as like_ratio
+                    , avg(order_1p_user_cnt_rate) as order_1p_user_cnt_rate
                       from daily_data d
                       group by 1,2,3,4) b on b.start_date = a.start_date and b.sigungu = a.sigungu and b.period = a.period
         left join (select
-                   date(dateadd(day,-(extract(dayofweek from date::date)+left('3',1)::INT-1)%7,date::date))::date as start_date
-                    , (date(dateadd(day,-(extract(dayofweek from date::date)+left('3',1)::INT-1)%7,date::date)) + interval '6 days')::date as end_date
+                   start_date
+                    , end_date
                     , sigungu
                     , '주-금목' as period
                     , count(distinct user_id) as paid_mbs_user_cnt
@@ -296,7 +302,15 @@ weekly_data_fri_thu AS (
                     , paid_mbs_user_cnt_3p_777_twice*100.0/nullif(paid_mbs_user_cnt,0) as paid_mbs_user_cnt_3p_777_twice_rate
                     , paid_mbs_user_cnt_3p_119_once*100.0/nullif(paid_mbs_user_cnt,0) as paid_mbs_user_cnt_3p_119_once_rate
                     , paid_mbs_user_cnt_1p_once*100.0/nullif(paid_mbs_user_cnt,0) as paid_mbs_user_cnt_1p_once_rate
-                   from mbs_activation_week m
+                   from (select user_id
+                                , date(dateadd(day,-(extract(dayofweek from date::date)+left('3',1)::INT-1)%7,date::date))::date as start_date
+                                , (date(dateadd(day,-(extract(dayofweek from date::date)+left('3',1)::INT-1)%7,date::date)) + interval '6 days')::date as end_date
+                                , sigungu
+                                , sum(order_cnt_3p_777) as order_cnt_3p_777
+                                , sum(order_cnt_3p_119) as order_cnt_3p_119
+                                , sum(order_cnt_1p) as order_cnt_1p
+                         from mbs_activation_week m
+                         group by 1,2,3,4) m
                    group by 1,2,3,4) c on c.start_date = a.start_date and c.sigungu = a.sigungu and c.period = a.period
         where rn = 1
 
@@ -306,7 +320,7 @@ weekly_data_mon_sun as (
     select a.start_date, a.end_date, a.period, a.sigungu,
        bc, bc_3p_today, bc_3p_special, bc_3p_green, bc_3p_dessert, bc_1p_amazing, bc_3p_general, bc_3p_curation,
        best_store_menu_cnt_3p_777, best_store_menu_cnt_3p_119, retention_rate_777_prev, retention_rate_119_prev, super_best_menu_cnt,
-       aoc, order_cnt_1p, like_ratio, order_1p_user_cnt_rate, paid_mbs_user_cnt_3p_777_twice_rate, paid_mbs_user_cnt_3p_119_once_rate
+       aoc, b.order_cnt_1p, like_ratio, order_1p_user_cnt_rate, paid_mbs_user_cnt_3p_777_twice_rate, paid_mbs_user_cnt_3p_119_once_rate
                     , paid_mbs_user_cnt_1p_once_rate
     from (
         select date(dateadd(day,-(extract(dayofweek from date::date)+left('7',1)::INT-1)%7,date::date))::date as start_date,
@@ -314,37 +328,37 @@ weekly_data_mon_sun as (
             date,
             '주-월일' as period,
             sigungu,
-            bc,
-            bc_3p_today,
-            bc_3p_special,
-            bc_3p_green,
-            bc_3p_dessert,
-            bc_1p_amazing,
-            bc_3p_general,
-            bc_3p_curation,
             best_store_menu_cnt_3p_777,
             best_store_menu_cnt_3p_119,
-            retention_rate_777_prev,
-            retention_rate_119_prev,
             super_best_menu_cnt,
             aoc,
             row_number() over (partition by sigungu, date(dateadd(day,-(extract(dayofweek from date::date)+left('7',1)::INT-1)%7,date::date)) order by date desc) as rn
          from daily_data) a
         left join (select
-            date(dateadd(day,-(extract(dayofweek from date::date)+left('7',1)::INT-1)%7,date::date))::date as start_date,
-            (date(dateadd(day,-(extract(dayofweek from date::date)+left('7',1)::INT-1)%7,date::date)) + interval '6 days')::date as end_date,
-                sigungu,
-            '주-월일' as period,
-            AVG(order_cnt_1p) as order_cnt_1p,
-            sum(like_cnt)*100.0  / sum(survey_cnt) as like_ratio,
-            avg(order_1p_user_cnt_rate) as order_1p_user_cnt_rate
+            date(dateadd(day,-(extract(dayofweek from date::date)+left('7',1)::INT-1)%7,date::date))::date as start_date
+            , (date(dateadd(day,-(extract(dayofweek from date::date)+left('7',1)::INT-1)%7,date::date)) + interval '6 days')::date as end_date
+            , sigungu
+            , '주-월일' as period
+            , sum(user_cnt_order)*100.0/nullif(sum(user_cnt_enter),0) as bc
+            , sum(user_cnt_order_3p_777)*100.0/nullif(sum(user_cnt_enter),0) as bc_3p_today
+            , sum(user_cnt_order_3p_119)*100.0/nullif(sum(user_cnt_enter),0) as bc_3p_special
+            , sum(user_cnt_order_3p_green)*100.0/nullif(sum(user_cnt_enter),0) as bc_3p_green
+            , sum(user_cnt_order_3p_dessert)*100.0/nullif(sum(user_cnt_enter),0) as bc_3p_dessert
+            , sum(user_cnt_order_1p)*100.0/nullif(sum(user_cnt_enter),0) as bc_1p_amazing
+            , sum(user_cnt_order_3p_general)*100.0/nullif(sum(user_cnt_enter),0) as bc_3p_general
+            , sum(user_cnt_order_3p_curation)*100.0/nullif(sum(user_cnt_enter),0) as bc_3p_curation
+            , avg(retention_rate_777_prev) as retention_rate_777_prev
+            , avg(retention_rate_119_prev) as retention_rate_119_prev
+            , avg(d.order_cnt_1p) as order_cnt_1p
+            , sum(like_cnt)*100.0  / nullif(sum(survey_cnt),0) as like_ratio
+            , avg(order_1p_user_cnt_rate) as order_1p_user_cnt_rate
               from daily_data d
               group by 1,2,3,4) b on b.start_date = a.start_date and b.sigungu = a.sigungu and b.period = a.period
         left join (select
-                   date(dateadd(day,-(extract(dayofweek from date::date)+left('7',1)::INT-1)%7,date::date))::date as start_date
-                    , (date(dateadd(day,-(extract(dayofweek from date::date)+left('7',1)::INT-1)%7,date::date)) + interval '6 days')::date as end_date
+                   start_date
+                    , end_date
                     , sigungu
-                    , '주-월일' as period
+                    , '주-금목' as period
                     , count(distinct user_id) as paid_mbs_user_cnt
                     , count(distinct case when order_cnt_3p_777 >=2 then user_id end) as paid_mbs_user_cnt_3p_777_twice
                     , count(distinct case when order_cnt_3p_119 >= 1 then user_id end) as paid_mbs_user_cnt_3p_119_once
@@ -352,7 +366,15 @@ weekly_data_mon_sun as (
                     , paid_mbs_user_cnt_3p_777_twice*100.0/nullif(paid_mbs_user_cnt,0) as paid_mbs_user_cnt_3p_777_twice_rate
                     , paid_mbs_user_cnt_3p_119_once*100.0/nullif(paid_mbs_user_cnt,0) as paid_mbs_user_cnt_3p_119_once_rate
                     , paid_mbs_user_cnt_1p_once*100.0/nullif(paid_mbs_user_cnt,0) as paid_mbs_user_cnt_1p_once_rate
-                   from mbs_activation_week m
+                   from (select user_id
+                                , date(dateadd(day,-(extract(dayofweek from date::date)+left('7',1)::INT-1)%7,date::date))::date as start_date
+                                , (date(dateadd(day,-(extract(dayofweek from date::date)+left('7',1)::INT-1)%7,date::date)) + interval '6 days')::date as end_date
+                                , sigungu
+                                , sum(order_cnt_3p_777) as order_cnt_3p_777
+                                , sum(order_cnt_3p_119) as order_cnt_3p_119
+                                , sum(order_cnt_1p) as order_cnt_1p
+                         from mbs_activation_week m
+                         group by 1,2,3,4) m
                    group by 1,2,3,4) c on c.start_date = a.start_date and c.sigungu = a.sigungu and c.period = a.period
     where rn = 1    
 )
@@ -361,7 +383,7 @@ monthly_data as (
     select a.start_date, a.end_date, a.period, a.sigungu,
        bc, bc_3p_today, bc_3p_special, bc_3p_green, bc_3p_dessert, bc_1p_amazing, bc_3p_general, bc_3p_curation,
        best_store_menu_cnt_3p_777, best_store_menu_cnt_3p_119, retention_rate_777_prev, retention_rate_119_prev, super_best_menu_cnt,
-       aoc, order_cnt_1p, like_ratio, order_1p_user_cnt_rate, paid_mbs_user_cnt_3p_777_twice_rate, paid_mbs_user_cnt_3p_119_once_rate
+       aoc, b.order_cnt_1p, like_ratio, order_1p_user_cnt_rate, paid_mbs_user_cnt_3p_777_twice_rate, paid_mbs_user_cnt_3p_119_once_rate
                     , paid_mbs_user_cnt_1p_once_rate
     from (
         select date_trunc('month',date::date)::date as start_date, 
@@ -369,38 +391,38 @@ monthly_data as (
             date,
             '월' as period,
             sigungu,
-            bc,
-            bc_3p_today,
-            bc_3p_special,
-            bc_3p_green,
-            bc_3p_dessert,            
-            bc_1p_amazing,
-            bc_3p_general,
-            bc_3p_curation,
             best_store_menu_cnt_3p_777,
             best_store_menu_cnt_3p_119,
-            retention_rate_777_prev,
-            retention_rate_119_prev,
             super_best_menu_cnt,
             aoc,
             row_number() over (partition by sigungu, date_trunc('month',date::date) order by date desc) as rn
          from daily_data) a
     left join (select
-                      date_trunc('month',date::date)::date as start_date,
-                    (last_day(date::date))::date as end_date,
-                        sigungu,
-                    '월' as period,
-                    AVG(order_cnt_1p) as order_cnt_1p,
-                    sum(like_cnt)*100.0  / sum(survey_cnt) as like_ratio
+                      date_trunc('month',date::date)::date as start_date
+                    , (last_day(date::date))::date as end_date
+                    , sigungu
+                    , '월' as period
+                    , sum(user_cnt_order)*100.0/nullif(sum(user_cnt_enter),0) as bc
+                    , sum(user_cnt_order_3p_777)*100.0/nullif(sum(user_cnt_enter),0) as bc_3p_today
+                    , sum(user_cnt_order_3p_119)*100.0/nullif(sum(user_cnt_enter),0) as bc_3p_special
+                    , sum(user_cnt_order_3p_green)*100.0/nullif(sum(user_cnt_enter),0) as bc_3p_green
+                    , sum(user_cnt_order_3p_dessert)*100.0/nullif(sum(user_cnt_enter),0) as bc_3p_dessert
+                    , sum(user_cnt_order_1p)*100.0/nullif(sum(user_cnt_enter),0) as bc_1p_amazing
+                    , sum(user_cnt_order_3p_general)*100.0/nullif(sum(user_cnt_enter),0) as bc_3p_general
+                    , sum(user_cnt_order_3p_curation)*100.0/nullif(sum(user_cnt_enter),0) as bc_3p_curation
+                    , avg(retention_rate_777_prev) as retention_rate_777_prev
+                    , avg(retention_rate_119_prev) as retention_rate_119_prev
+                    , avg(d.order_cnt_1p) as order_cnt_1p
+                    , sum(like_cnt)*100.0  / nullif(sum(survey_cnt),0) as like_ratio
                     , avg(order_1p_user_cnt_rate) as order_1p_user_cnt_rate
                   from daily_data d
                   group by 1,2,3,4
                    ) b on b.start_date = a.start_date and b.sigungu = a.sigungu and b.period = a.period
     left join (select
-                   date_trunc('month',date::date)::date as start_date
-                    , (last_day(date::date))::date as end_date
+                   start_date
+                    , end_date
                     , sigungu
-                    , '월' as period
+                    , '주-금목' as period
                     , count(distinct user_id) as paid_mbs_user_cnt
                     , count(distinct case when order_cnt_3p_777 >=2 then user_id end) as paid_mbs_user_cnt_3p_777_twice
                     , count(distinct case when order_cnt_3p_119 >= 1 then user_id end) as paid_mbs_user_cnt_3p_119_once
@@ -408,7 +430,15 @@ monthly_data as (
                     , paid_mbs_user_cnt_3p_777_twice*100.0/nullif(paid_mbs_user_cnt,0) as paid_mbs_user_cnt_3p_777_twice_rate
                     , paid_mbs_user_cnt_3p_119_once*100.0/nullif(paid_mbs_user_cnt,0) as paid_mbs_user_cnt_3p_119_once_rate
                     , paid_mbs_user_cnt_1p_once*100.0/nullif(paid_mbs_user_cnt,0) as paid_mbs_user_cnt_1p_once_rate
-                   from mbs_activation_week m
+                   from (select user_id
+                                , date_trunc('month',date::date)::date as start_date
+                                , (last_day(date::date))::date as end_date
+                                , sigungu
+                                , sum(order_cnt_3p_777) as order_cnt_3p_777
+                                , sum(order_cnt_3p_119) as order_cnt_3p_119
+                                , sum(order_cnt_1p) as order_cnt_1p
+                         from mbs_activation_week m
+                         group by 1,2,3,4) m
                    group by 1,2,3,4) c on c.start_date = a.start_date and c.sigungu = a.sigungu and c.period = a.period
     where rn = 1
 )    
