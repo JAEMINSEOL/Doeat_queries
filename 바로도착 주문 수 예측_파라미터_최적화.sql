@@ -1,4 +1,5 @@
--- LUNCH time analysis query (10:00~13:00) - Optimized Redshift version
+-- LUNCH (10:00~13:00), DINNER (17:00~20:00) - Optimized Redshift version
+
 WITH
 -- Korean holidays 2025
 holidays AS (
@@ -12,7 +13,9 @@ holidays AS (
 
 time_slots AS (
   SELECT '10:00' as time_slot union all select '10:30' union all
-    select '11:00' union all select '11:30' union all select '12:00' union all select '12:30'
+    select '11:00' union all select '11:30' union all select '12:00' union all select '12:30' union all
+    SELECT '17:00' as time_slot union all select '17:30' union all
+    select '18:00' union all select '18:30' union all select '19:00' union all select '19:30'
 ),
     rainy_days as (
         select date(d.created_at)
@@ -26,14 +29,10 @@ store_product_combinations AS (
     SELECT 6280 as store_id, 5389 as product_id UNION ALL
     SELECT 6280 as store_id, 6067 as product_id UNION ALL
     SELECT 6773 as store_id, 7417 as product_id UNION ALL
-    SELECT 6773 as store_id, 7343 as product_id
-),
+    SELECT 6773 as store_id, 7343 as product_id UNION ALL
 
--- Analysis period (last 45 days for performance)
-analysis_period AS (
-    SELECT
-        DATEADD(day, -90, CURRENT_DATE) as min_date,
-        CURRENT_DATE as max_date
+    SELECT 6280 as store_id, 6955 as product_id UNION ALL
+    SELECT 6773 as store_id, 7912 as product_id
 ),
 
 -- Filtered orders (filter by time/date/store first)
@@ -48,13 +47,16 @@ filtered_orders AS (
         o.hname
     FROM doeat_delivery_production.team_order too
     JOIN doeat_delivery_production.orders o ON too.id = o.team_order_id
-    CROSS JOIN analysis_period ap
-    WHERE too.created_at::date >= ap.min_date
-      AND too.created_at::date <= ap.max_date
-      AND EXTRACT(hour FROM too.created_at) BETWEEN 10 AND 12
+    WHERE too.is_test_team_order=0
+      and o.paid_at is not null
+      and o.orderyn = 1
+      AND EXTRACT(hour FROM too.created_at) BETWEEN 10 AND 20
       AND too.store_id IN (6280, 6773)
       AND too.order_status = 'DELIVERED'
-      AND o.hname IN ('신림동', '서원동', '서림동', '대학동', '보라매동', '은천동', '신원동', '청룡동', '낙성대동', '행운동', '중앙동', '성현동', '인헌동')
+      AND ((o.sigungu='관악구' and o.hname in ('신림동', '서원동', '서림동', '대학동', '보라매동', '은천동', '신원동', '청룡동', '낙성대동', '행운동', '중앙동', '성현동', '인헌동'))
+            or (o.sigungu = '동작구' ))
+            -- and o.hname in ('사당1동','사당2동','흑석동','상도1동')
+    and o.hname is not null
 ),
 
 -- Count items per order by store
@@ -62,17 +64,18 @@ order_item_counts AS (
     SELECT
         fo.team_order_id,
         fo.store_id,
+        i.product_id,
         fo.created_at,
         fo.order_date,
         fo.dayofweek,
         fo.order_id,
-        COUNT(CASE WHEN fo.store_id = 6280 AND i.product_id IN (5389, 6067) THEN 1 END) as valid_items_6280,
-        COUNT(CASE WHEN fo.store_id = 6773 AND i.product_id IN (7417, 7343) THEN 1 END) as valid_items_6773,
-        COUNT(CASE WHEN fo.store_id = 6280 AND i.product_id NOT IN (5389, 6067) THEN 1 END) as invalid_items_6280,
-        COUNT(CASE WHEN fo.store_id = 6773 AND i.product_id NOT IN (7417, 7343) THEN 1 END) as invalid_items_6773
+        COUNT(CASE WHEN fo.store_id = 6280 AND i.product_id IN (5389, 6067,6955) THEN 1 END) as valid_items_6280,
+        COUNT(CASE WHEN fo.store_id = 6773 AND i.product_id IN (7417, 7343, 7912) THEN 1 END) as valid_items_6773,
+        COUNT(CASE WHEN fo.store_id = 6280 AND i.product_id NOT IN (5389, 6067,6955) THEN 1 END) as invalid_items_6280,
+        COUNT(CASE WHEN fo.store_id = 6773 AND i.product_id NOT IN (7417, 7343,7912) THEN 1 END) as invalid_items_6773
     FROM filtered_orders fo
     JOIN doeat_delivery_production.item i ON fo.order_id = i.order_id
-    GROUP BY fo.team_order_id, fo.store_id, fo.created_at, fo.order_date, fo.dayofweek, fo.order_id
+    GROUP BY 1,2,3,4,5,6,7
 ),
 
 -- Valid orders with bundle conditions
@@ -117,7 +120,7 @@ prediction_dates AS (
         FROM doeat_delivery_production.team_order
         LIMIT 200
     ) nums
-    WHERE DATEADD(day, n, DATE('2025-06-01')) <= CURRENT_DATE
+    WHERE DATEADD(day, n, DATE('2025-06-01')) <= DATEADD(day, 7, CURRENT_DATE)
 ),
 
 -- All prediction combinations
@@ -152,8 +155,8 @@ historical_analysis AS (
                                  and po.time_slot = pc.time_slot
                                  AND po.order_date >= CASE
                                      WHEN pc.prediction_date <= CURRENT_DATE
-                                     THEN DATEADD(day, -60, pc.prediction_date)
-                                     ELSE DATEADD(day, -60, CURRENT_DATE)
+                                     THEN DATEADD(day, -30, pc.prediction_date)
+                                     ELSE DATEADD(day, -30, CURRENT_DATE)
                                  END
                                  AND po.order_date <= CASE
                                      WHEN pc.prediction_date <= CURRENT_DATE
@@ -164,7 +167,7 @@ historical_analysis AS (
     order by 1,5
 )
 
--- select * from prediction_combinations
+-- select * from filtered_orders
 select prediction_date
 , TO_CHAR(ha.prediction_date, 'Day') as day_of_week
 , ha.store_id::varchar as store_id
