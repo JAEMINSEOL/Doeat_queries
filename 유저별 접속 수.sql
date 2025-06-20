@@ -46,6 +46,7 @@ select count(distinct user_id) as 유저수
                                 , l.log_action
                                 , row_number() over (partition by l.user_id order by l.created_at desc) as rn
                                 from doeat_data_mart.user_log l
+                                where date(l.created_at) > '2025-05-18'
                     ) o where rn=1) l on l.user_id = o.user_id  -- the most recent log
                 )
 where 큐레이션_주문수=1
