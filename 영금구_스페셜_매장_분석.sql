@@ -1,6 +1,6 @@
 select sigungu,store_id,store_name, m.product_id,menu_name
         , count(case when m.daily_sellable_minutes_store>= 180 then m.target_date end) as selling_days_over_180mins
-        , avg(ord_cnt*1.0) as avg_ord_cnt
+        , coalesce(avg(ord_cnt*1.0),0) as avg_ord_cnt
        , avg(daily_noph) as avg_noph
         , like_ratio_rolling_30
         , sum(feedback_count) as cumul_feedback_count
@@ -14,7 +14,6 @@ left join (select o.created_at::date as date, product_id, count(distinct o.id) a
       and o.delivered_at is not null
       and t.is_test_team_order=0
       and o.type like '%119%'
-      and product_id=9052
       group by 1,2) o on o.date=m.target_date and o.product_id=m.product_id
 join (select product_id,
              count(distinct case when feedback_type = 'LIKE' then created_at end) * 100.0 /count(distinct created_at) as like_ratio_rolling_30
