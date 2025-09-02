@@ -5,6 +5,11 @@ select date_trunc('week',o.created_at)::date as week
         , count(distinct case when p.discounted_price = 9900 then o.id end)*100.0 / count(distinct o.id) as special_9900_ord_rate
 , count(distinct case when p.discounted_price  = 12900 then o.id end)*100.0 / count(distinct o.id) as special_12900_ord_rate
 , count(distinct case when p.discounted_price  = 14900 then o.id end)*100.0 / count(distinct o.id) as special_14900_ord_rate
+
+, avg( case when p.discounted_price = 9900 then order_price end) as special_9900_aov
+, avg( case when p.discounted_price  = 12900 then order_price end) as special_12900_aov
+, avg( case when p.discounted_price  = 14900 then order_price end) as special_14900_aov
+
 from doeat_delivery_production.orders o
 join doeat_delivery_production.team_order t on t.id = o.team_order_id
 join doeat_delivery_production.item i on i.order_id = o.id
